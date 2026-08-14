@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+token.txt
+radar.db
+bot.lock
+bot.log
