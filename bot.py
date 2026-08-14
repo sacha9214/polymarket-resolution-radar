@@ -14,6 +14,7 @@ Jeton : token.txt à côté de ce script (une ligne), ou DISCORD_BOT_TOKEN.
 
 import asyncio
 import fcntl
+import re
 import os
 import sqlite3
 import sys
@@ -93,7 +94,53 @@ db.execute(
   channel_id INTEGER PRIMARY KEY, message_id INTEGER, updated INTEGER)"""
 )
 db.execute("""CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)""")
+# Salons retenus par IDENTIFIANT, pas par nom : un identifiant survit aux
+# renommages, un nom non. Sans ça, ajouter un emoji au nom d'un salon fait
+# que `/setup` ne le reconnaît plus et en recrée un doublon à côté.
+db.execute(
+    """CREATE TABLE IF NOT EXISTS channels(
+  guild_id INTEGER, key TEXT, channel_id INTEGER,
+  PRIMARY KEY(guild_id, key))"""
+)
 db.commit()
+
+
+def _norm(name: str) -> str:
+    """Nom comparable : emojis, accents et ponctuation retirés."""
+    return re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
+
+
+async def ensure_channel(guild, cat, key, display, topic, overwrites):
+    """Retrouve un salon par ID mémorisé, puis par nom normalisé, sinon le crée.
+
+    Trois niveaux de repli, du plus robuste au plus fragile, pour que l'on
+    puisse renommer les salons librement sans que `/setup` fasse des doublons.
+    """
+    row = db.execute(
+        "SELECT channel_id FROM channels WHERE guild_id=? AND key=?", (guild.id, key)
+    ).fetchone()
+    if row:
+        ch = guild.get_channel(row[0])
+        if ch is not None:
+            return ch, False
+
+    target = _norm(key)
+    for ch in cat.text_channels:
+        if _norm(ch.name) == target:
+            db.execute(
+                "INSERT OR REPLACE INTO channels VALUES(?,?,?)", (guild.id, key, ch.id)
+            )
+            db.commit()
+            return ch, False
+
+    ch = await guild.create_text_channel(
+        display, category=cat, topic=topic, overwrites=overwrites
+    )
+    db.execute(
+        "INSERT OR REPLACE INTO channels VALUES(?,?,?)", (guild.id, key, ch.id)
+    )
+    db.commit()
+    return ch, True
 
 
 def meta_get(k, default=None):
@@ -637,12 +684,15 @@ async def setup(ctx):
         g.me: discord.PermissionOverwrite(send_messages=True, manage_messages=True),
     }
 
+    # (clé logique, nom affiché à la création, sujet, lecture seule)
+    # La clé ne change jamais : c'est elle qui identifie le salon en base.
+    # Le nom affiché, lui, est libre — tu peux le renommer sans rien casser.
     plan = [
-        ("radar-guide", "Read this first — what the resolution phase is", True),
-        ("radar-board", "Live state of resolutions, rewritten automatically", True),
-        ("dispute-alerts", "Disputes, proposal gaps and resolution shocks", True),
-        ("stuck-markets", "Markets past their end date with capital locked", True),
-        ("radar-discussion", "Talk about it here — open to everyone", False),
+        ("radar-guide", "📖radar-guide", "Read this first — what the resolution phase is", True),
+        ("radar-board", "🛰️radar-board", "Live state of resolutions, rewritten automatically", True),
+        ("dispute-alerts", "🔴dispute-alerts", "Disputes, proposal gaps and resolution shocks", True),
+        ("stuck-markets", "🟡stuck-markets", "Markets past their end date with capital locked", True),
+        ("radar-discussion", "💬radar-discussion", "Talk about it here — open to everyone", False),
     ]
 
     cat = discord.utils.get(g.categories, name="POLYMARKET RESOLUTION")
@@ -650,28 +700,22 @@ async def setup(ctx):
         cat = await g.create_category("POLYMARKET RESOLUTION")
 
     made, reused, chans = [], [], {}
-    for name, topic, locked in plan:
-        # Chercher UNIQUEMENT dans notre catégorie : une recherche sur tout le
-        # serveur retrouverait les salons des deux autres bots Polymarket et
-        # irait écrire chez eux.
-        ch = discord.utils.get(cat.text_channels, name=name)
-        if ch is None:
-            try:
-                ch = await g.create_text_channel(
-                    name, category=cat, topic=topic,
-                    overwrites=read_only if locked else {},
-                )
-            except discord.DiscordException as e:
-                return await ctx.respond(
-                    f"Failed while creating **#{name}**: {e}\n"
-                    "Fix the permission and run `/setup` again — channels already "
-                    "created are reused, not duplicated.",
-                    ephemeral=True,
-                )
-            made.append(ch)
-        else:
-            reused.append(ch)
-        chans[name] = ch
+    for key, display, topic, locked in plan:
+        # La recherche reste confinée à NOTRE catégorie : balayer tout le serveur
+        # retrouverait les salons des deux autres bots Polymarket.
+        try:
+            ch, created = await ensure_channel(
+                g, cat, key, display, topic, read_only if locked else {}
+            )
+        except discord.DiscordException as e:
+            return await ctx.respond(
+                f"Failed while creating **{display}**: {e}\n"
+                "Fix the permission and run `/setup` again — existing channels "
+                "are reused, not duplicated.",
+                ephemeral=True,
+            )
+        (made if created else reused).append(ch)
+        chans[key] = ch
 
     await upsert_pinned(chans["radar-guide"], "guides", build_guide_embed())
 
