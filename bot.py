@@ -170,6 +170,9 @@ def signal_embed(s) -> discord.Embed:
     e.add_field(name="24h volume", value=R.fmt_usd(m.volume24h), inline=True)
     e.add_field(name="Turnover", value=f"{m.turnover:.1f}× book", inline=True)
     e.add_field(name="Spread", value=f"{m.spread*100:.1f}¢", inline=True)
+    if s.action:
+        e.add_field(name="👉 What this means for you", value=s.action[:1024], inline=False)
+
     e.set_footer(
         text="Polymarket does not publish which outcome was proposed — "
         "check the market itself before acting."
@@ -250,6 +253,11 @@ GUIDE = (
     "date. A market trading several times its own book in a day had news.\n"
     "🟡 **Stuck** — past its end date with no resolution proposed at all. Cases "
     "over 200 days late exist. Your capital is simply parked.\n\n"
+    "**Every alert says what it means for you**\n"
+    "Each one ends with a « What this means for you » block: whether there is "
+    "anything to do, what to check first, and when the honest answer is « stay "
+    "away ». Only **proposal gaps** are directly tradable — and only if you can "
+    "verify the outcome yourself against the market's stated source.\n\n"
     "**What the bot cannot tell you**\n"
     "Polymarket publishes the resolution *status* but never **which outcome was "
     "proposed**. So the bot describes the situation, never a direction. Anyone "
@@ -717,6 +725,21 @@ async def on_ready():
 
     if not poll.is_running():
         poll.start()
+
+
+@bot.event
+async def on_guild_join(guild):
+    """Synchroniser à l'arrivée sur un serveur, et pas seulement au démarrage.
+
+    `on_ready` ne voit que les serveurs déjà rejoints. Un bot invité APRÈS son
+    lancement se retrouve donc sans aucune commande dans le menu, sans erreur ni
+    trace : il faut le redémarrer à la main pour que les commandes apparaissent.
+    """
+    try:
+        await bot.sync_commands(guild_ids=[guild.id], force=True)
+        print(f"Commands synced on join: {guild.name} ({guild.id})", flush=True)
+    except discord.DiscordException as e:
+        print(f"Sync on join failed for {guild.id}: {e}", flush=True)
 
 
 def main():

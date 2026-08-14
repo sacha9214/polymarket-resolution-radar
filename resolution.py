@@ -234,6 +234,10 @@ class Signal:
     market: Market
     headline: str
     detail: str
+    # Ce que la situation implique CONCRÈTEMENT pour quelqu'un qui détient ou
+    # regarde ce marché. Décrire sans dire « et donc ? » laisse le lecteur
+    # deviner, et c'est là qu'il se trompe.
+    action: str = ""
     # "alert" = poussé dans le salon ; "digest" = visible seulement dans le
     # tableau et /radar. Un marché échu de plus n'est pas une nouvelle, mais
     # 3,3 M$ immobilisés au total en est une.
@@ -331,6 +335,16 @@ def classify(m: Market) -> list[Signal]:
                     f"delay, and the outcome can still flip. Capital in this "
                     f"market is locked until it settles."
                 ),
+                action=(
+                    "**If you hold this market:** your money is locked until the "
+                    "vote ends, and the side that pays out can still change. Do "
+                    "not count on this settling soon.\n"
+                    "**If you don't:** this is uncertainty, not an opportunity. "
+                    "The price can swing hard in either direction, and nobody "
+                    "outside the dispute knows which way. Only trade it if you "
+                    "have independently checked the resolution criteria and "
+                    "believe you know the answer better than the disputer does."
+                ),
             )
         )
 
@@ -358,6 +372,15 @@ def classify(m: Market) -> list[Signal]:
                     f"dispute. Polymarket does not publish WHICH outcome was "
                     f"proposed, so check the market before acting."
                 ),
+                action=(
+                    "**This is the one case here that can be traded.** Open the "
+                    "market, read its resolution criteria, and check the outcome "
+                    "yourself against the stated source. If you can confirm the "
+                    "favourite is right, buying it below 1.00 pays the difference "
+                    "at settlement.\n"
+                    "**If you cannot confirm it yourself, skip it** — the gap "
+                    "usually means the market disagrees, and a dispute follows."
+                ),
             )
         )
 
@@ -381,6 +404,12 @@ def classify(m: Market) -> list[Signal]:
                     f"resolution proposed. {fmt_usd(m.liquidity)} of liquidity is "
                     f"sitting here with no settlement date. Usually means the "
                     f"resolution criteria turned out to be ambiguous."
+                ),
+                action=(
+                    "**Nothing to buy here — this is a warning.** Money committed "
+                    "to this market has no settlement date. Treat it as the cost "
+                    "of markets whose wording was never precise enough, and "
+                    "factor that risk in before entering similar ones."
                 ),
             )
         )
@@ -412,6 +441,13 @@ def classify(m: Market) -> list[Signal]:
                     f"book depth in a day, which is what an information event "
                     f"looks like rather than a drifting quote."
                 ),
+                action=(
+                    "**Find the news before doing anything.** A move this size "
+                    "with this much turnover means informed money already acted. "
+                    "Buying the direction of the move after the fact is chasing; "
+                    "the tradable question is whether it overshot, and you can "
+                    "only answer that by knowing what happened."
+                ),
             )
         )
 
@@ -433,6 +469,10 @@ def classify(m: Market) -> list[Signal]:
                     f"{fmt_usd(m.liquidity)} liquidity, spread {m.spread*100:.1f}¢. "
                     f"Liquidity usually thins out right after the end date and "
                     f"before settlement — plan the exit now if you hold this."
+                ),
+                action=(
+                    "**Only matters if you hold it.** Getting out is cheapest "
+                    "now, while the book is still deep."
                 ),
             )
         )
