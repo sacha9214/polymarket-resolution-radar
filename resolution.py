@@ -539,6 +539,39 @@ async def _sweep(session, order: str, ascending: bool) -> list[dict]:
     return out
 
 
+async def fetch_outcomes(ids: list[str], limit: int = 200) -> dict[str, int]:
+    """Issue réelle des marchés donnés : {market_id: 1 si YES a gagné}.
+
+    Le lot par identifiants n'est pas supporté par Gamma (`?id=&id=` renvoie une
+    liste vide), il faut donc interroger marché par marché — acceptable car seuls
+    les marchés fraîchement disparus des scans sont concernés.
+
+    ⚠️ Les marchés ANNULÉS renvoient `["0","0"]` : ni YES ni NO n'a gagné. Les
+    compter comme des « NO » fausserait toute étude de calibration en gonflant
+    artificiellement le taux d'échec. On les écarte.
+    """
+    out: dict[str, int] = {}
+    sem = asyncio.Semaphore(6)
+
+    async def one(session, mid):
+        async with sem:
+            data = await _get(session, f"{GAMMA}/markets/{mid}")
+        if not data or not data.get("closed"):
+            return
+        prices = _jloads(data.get("outcomePrices"), [])
+        if len(prices) != 2:
+            return
+        if prices[0] == "1" and prices[1] == "0":
+            out[mid] = 1
+        elif prices[0] == "0" and prices[1] == "1":
+            out[mid] = 0
+        # tout le reste (dont ["0","0"] = annulé) est ignoré volontairement
+
+    async with aiohttp.ClientSession() as session:
+        await asyncio.gather(*(one(session, m) for m in ids[:limit]))
+    return out
+
+
 @dataclass
 class RadarResult:
     signals: list[Signal]
@@ -547,6 +580,10 @@ class RadarResult:
     counts: dict = field(default_factory=dict)
     locked_capital: float = 0.0  # liquidité totale coincée dans les marchés échus
     overdue_total: int = 0
+    # TOUS les marchés analysés, pas seulement ceux qui produisent un signal.
+    # L'enregistreur en a besoin : la valeur du jeu de données vient justement
+    # des marchés où il ne se passe rien, qui servent de témoins.
+    markets: list = field(default_factory=list)
 
     @property
     def alerts(self) -> list[Signal]:
@@ -600,6 +637,7 @@ async def scan() -> RadarResult:
         duration=asyncio.get_event_loop().time() - started,
         counts=counts,
         locked_capital=sum(m.liquidity for m in overdue),
+        markets=list(seen.values()),
         overdue_total=len(overdue),
     )
 

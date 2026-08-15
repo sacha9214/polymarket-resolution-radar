@@ -1,7 +1,10 @@
-venv/
-__pycache__/
 *.pyc
-token.txt
-radar.db
+__pycache__/
 bot.lock
 bot.log
+history.db
+history.db-shm
+history.db-wal
+radar.db
+token.txt
+venv/

@@ -24,6 +24,7 @@ from pathlib import Path
 import discord
 from discord.ext import tasks
 
+import history as H
 import resolution as R
 
 # ---------------------------------------------------------------------------
@@ -94,6 +95,12 @@ db.execute(
   channel_id INTEGER PRIMARY KEY, message_id INTEGER, updated INTEGER)"""
 )
 db.execute("""CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)""")
+
+# Enregistreur : base SÉPARÉE de radar.db, pour que la base opérationnelle reste
+# petite et rapide, et que le jeu de données se copie indépendamment. Polymarket
+# purge l'historique de prix après résolution (mesuré : 0 point sur 500 marchés
+# clos), donc l'enregistrer nous-mêmes est le seul moyen d'en disposer.
+recorder = H.Recorder(Path(__file__).with_name("history.db"))
 # Salons retenus par IDENTIFIANT, pas par nom : un identifiant survit aux
 # renommages, un nom non. Sans ça, ajouter un emoji au nom d'un salon fait
 # que `/setup` ne le reconnaît plus et en recrée un doublon à côté.
@@ -398,13 +405,30 @@ def mark_seen(channel_id: int, key: str):
 async def poll():
     feeds = db.execute("SELECT channel_id, kind FROM feeds").fetchall()
     boards = db.execute("SELECT channel_id FROM board").fetchall()
-    if not feeds and not boards:
-        return
-
+    # Le scan tourne même sans abonné : l'enregistrement du jeu de données ne
+    # dépend pas de Discord, et chaque cycle manqué est une donnée perdue pour
+    # toujours — l'historique ne se rattrape pas après coup.
     try:
         res = await get_radar(force=True)
     except Exception as e:  # noqa: BLE001
         print(f"[poll] scan failed: {type(e).__name__}: {e}", flush=True)
+        return
+
+    # Isolé dans son propre try : une panne de l'enregistreur ne doit jamais
+    # empêcher les alertes de partir. Le bot rend un service aujourd'hui, le jeu
+    # de données n'en rendra un que dans plusieurs mois.
+    try:
+        st = recorder.record(res.markets)
+        pending = recorder.pending_settlement()
+        settled = 0
+        if pending:
+            settled = recorder.settle(await R.fetch_outcomes(pending))
+        if st.inserted or settled:
+            print(f"[data] {st} · {settled} résolution(s) inscrite(s)", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[data] recorder failed: {type(e).__name__}: {e}", flush=True)
+
+    if not feeds and not boards:
         return
 
     for (channel_id,) in boards:
