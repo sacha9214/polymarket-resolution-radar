@@ -96,6 +96,10 @@ db.execute(
 )
 # Même schéma que `board` pour réutiliser `upsert_pinned` sans le modifier.
 db.execute(
+    """CREATE TABLE IF NOT EXISTS stuckboard(
+  channel_id INTEGER PRIMARY KEY, message_id INTEGER, updated INTEGER)"""
+)
+db.execute(
     """CREATE TABLE IF NOT EXISTS databoard(
   channel_id INTEGER PRIMARY KEY, message_id INTEGER, updated INTEGER)"""
 )
@@ -240,6 +244,71 @@ def signal_embed(s) -> discord.Embed:
 
 
 CALIB_TARGET = 100   # marchés résolus nécessaires pour une première étude
+
+
+def stuck_embed(res) -> discord.Embed:
+    """Tableau permanent des marchés échus sans résolution.
+
+    Le flux d'alertes ne signale que les NOUVEAUX cas, et une photo de référence
+    est prise à l'abonnement pour ne pas déverser 25 alertes d'un coup. Le salon
+    reste donc quasi muet alors que l'information vraiment intéressante est un
+    état, pas un événement : combien d'argent dort, depuis combien de temps.
+    """
+    stuck = sorted(res.by_kind("overdue"), key=lambda s: -s.market.liquidity)
+    oldest = max((s.market.days_late for s in stuck), default=0)
+
+    e = discord.Embed(
+        title="🟡 Stuck markets — live",
+        description=(
+            f"**{R.fmt_usd(res.locked_capital)}** is sitting in **{len(stuck)}** "
+            f"markets that are past their end date with no resolution proposed.\n"
+            f"The oldest is **{oldest:.0f} days** late."
+        ),
+        color=0xF1C40F if stuck else 0x34495E,
+    )
+
+    if stuck:
+        lines = [
+            f"`{R.fmt_usd(s.market.liquidity):>7}` `{s.market.days_late:>4.0f}d` "
+            f"[{s.market.title[:44]}]({s.market.url})"
+            for s in stuck[:10]
+        ]
+        e.add_field(name="Most capital stuck", value="\n".join(lines)[:1024], inline=False)
+
+        old = sorted(stuck, key=lambda s: -s.market.days_late)[:5]
+        e.add_field(
+            name="Longest overdue",
+            value="\n".join(
+                f"`{s.market.days_late:>4.0f}d` `{R.fmt_usd(s.market.liquidity):>7}` "
+                f"{s.market.title[:44]}"
+                for s in old
+            )[:1024],
+            inline=False,
+        )
+
+        buckets = [(180, "6 months+"), (90, "3–6 months"), (30, "1–3 months"), (0, "under a month")]
+        counts, prev = [], 10**9
+        for lim, label in buckets:
+            n = sum(1 for s in stuck if lim <= s.market.days_late < prev)
+            if n:
+                counts.append(f"{label}: **{n}**")
+            prev = lim
+        if counts:
+            e.add_field(name="How late", value=" · ".join(counts), inline=False)
+
+    e.add_field(
+        name="What this means",
+        value=(
+            "Nothing to buy here. Money committed to these markets has no "
+            "settlement date — usually because the wording was never precise "
+            "enough to resolve cleanly. Treat it as the cost of imprecise "
+            "markets, and factor it in before entering similar ones."
+        ),
+        inline=False,
+    )
+    e.set_footer(text=f"Rewritten every {POLL_MINUTES} min · new cases are also pushed as alerts")
+    e.timestamp = discord.utils.utcnow()
+    return e
 
 
 def dataset_embed() -> discord.Embed:
@@ -550,6 +619,15 @@ async def poll():
 
     if not feeds and not boards:
         return
+
+    for (channel_id,) in db.execute("SELECT channel_id FROM stuckboard").fetchall():
+        ch = bot.get_channel(channel_id)
+        if ch is None:
+            continue
+        try:
+            await upsert_pinned(ch, "stuckboard", stuck_embed(res))
+        except discord.DiscordException as e:
+            print(f"[poll] stuckboard failed on {channel_id}: {e}", flush=True)
 
     for (channel_id,) in db.execute("SELECT channel_id FROM databoard").fetchall():
         ch = bot.get_channel(channel_id)
@@ -867,6 +945,22 @@ async def dataset_board_cmd(ctx):
         f"every {POLL_MINUTES} min**, so this channel always shows the current "
         "state.\nExpect it to look idle at first — the counter that matters "
         "(**resolved markets**) only moves as markets settle.",
+    )
+
+
+@bot.slash_command(
+    name="stuck-board",
+    description="Install the live stuck-markets board in this channel",
+    guild_ids=GUILDS,
+)
+async def stuck_board_cmd(ctx):
+    await ctx.defer(ephemeral=True)
+    res = await get_radar()
+    await install_pinned(
+        ctx, "stuckboard", stuck_embed(res),
+        f"🟡 Stuck-markets board installed and pinned, rewritten every "
+        f"{POLL_MINUTES} min.\nThe alert feed only fires on **new** cases; this "
+        "board always shows the full picture.",
     )
 
 
