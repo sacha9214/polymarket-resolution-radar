@@ -434,6 +434,33 @@ async def upsert_pinned(channel, table: str, embed: discord.Embed):
     return msg
 
 
+async def install_pinned(ctx, table: str, embed: discord.Embed, ok: str) -> bool:
+    """Pose un message épinglé et répond TOUJOURS à l'interaction.
+
+    Sans ce garde-fou, un salon où le bot n'a pas le droit d'écrire fait
+    remonter une `Forbidden` : l'interaction déjà différée n'est jamais
+    répondue, et Discord affiche « réfléchit… » indéfiniment. L'utilisateur
+    n'a alors aucune idée de ce qui manque.
+    """
+    try:
+        await upsert_pinned(ctx.channel, table, embed)
+    except discord.Forbidden:
+        await ctx.respond(
+            "❌ I can't post in this channel.\n"
+            "Give my role **Send Messages** and **Embed Links** here — plus "
+            "**Manage Messages** if you want the message pinned — then run the "
+            "command again.\n"
+            "Server Settings → Roles, or the channel's own permission overrides.",
+            ephemeral=True,
+        )
+        return False
+    except discord.DiscordException as e:
+        await ctx.respond(f"❌ Discord refused: {e}", ephemeral=True)
+        return False
+    await ctx.respond(ok, ephemeral=True)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Suivi des alertes déjà vues
 # ---------------------------------------------------------------------------
@@ -713,10 +740,9 @@ async def status(ctx):
 async def board(ctx):
     await ctx.defer(ephemeral=True)
     res = await get_radar()
-    await upsert_pinned(ctx.channel, "board", board_embed(res))
-    await ctx.respond(
+    await install_pinned(
+        ctx, "board", board_embed(res),
         f"🛰️ Board installed and pinned, rewritten every {POLL_MINUTES} min.",
-        ephemeral=True,
     )
 
 
@@ -725,11 +751,10 @@ async def board(ctx):
 )
 async def guide(ctx):
     await ctx.defer(ephemeral=True)
-    await upsert_pinned(ctx.channel, "guides", build_guide_embed())
-    await ctx.respond(
+    await install_pinned(
+        ctx, "guides", build_guide_embed(),
         "📖 Guide posted and pinned. Running `/guide` again updates that same "
         "message instead of adding another one.",
-        ephemeral=True,
     )
 
 
@@ -813,13 +838,12 @@ async def dataset_cmd(ctx):
 )
 async def dataset_board_cmd(ctx):
     await ctx.defer(ephemeral=True)
-    await upsert_pinned(ctx.channel, "databoard", dataset_embed())
-    await ctx.respond(
+    await install_pinned(
+        ctx, "databoard", dataset_embed(),
         f"🗄️ Dataset board installed and pinned. It is **rewritten in place "
         f"every {POLL_MINUTES} min**, so this channel always shows the current "
         "state.\nExpect it to look idle at first — the counter that matters "
         "(**resolved markets**) only moves as markets settle.",
-        ephemeral=True,
     )
 
 
