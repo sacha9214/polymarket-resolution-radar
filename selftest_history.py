@@ -309,6 +309,65 @@ def test_calibration_sur_donnees_synthetiques():
         cleanup(rec, p)
 
 
+@case
+def test_marches_courts_ne_comptent_pas():
+    """Régression du faux « Ready » observé en production le 2026-08-15.
+
+    492 marchés étaient annoncés résolus, donc « prêts » — mais leur médiane
+    d'observation avant résolution était de 4,4 h et 98 % d'entre eux étaient
+    déjà au-delà de 0,95 ou sous 0,05 quand on les a vus. Compter les résolus
+    surestimait massivement ce qui est réellement exploitable.
+    """
+    rec, p = fresh()
+    try:
+        res_at, h = 10_000_000, 3600
+
+        # Marché court : vu 2 h avant sa résolution, déjà quasi certain.
+        rec.record([FakeMarket("court", 0.99)], ts=res_at - 2 * h)
+        rec.settle({"court": 1}, now=res_at)
+
+        # Marché déjà tranché : vu tôt, mais dans une zone sans incertitude.
+        rec.record([FakeMarket("tranche", 0.995)], ts=res_at - 48 * h)
+        rec.settle({"tranche": 1}, now=res_at)
+
+        # Le seul vraiment utile : vu 48 h avant, à un prix réellement incertain.
+        rec.record([FakeMarket("utile", 0.42)], ts=res_at - 48 * h)
+        rec.settle({"utile": 1}, now=res_at)
+
+        assert rec.stats()["resolved"] == 3
+        assert rec.usable_for_calibration() == 1, (
+            "seul le marché observé tôt ET dans la zone incertaine doit compter"
+        )
+    finally:
+        cleanup(rec, p)
+
+
+@case
+def test_eta_projette_sur_les_marches_utiles():
+    """Projeter sur les résolutions brutes rendrait l'échéance dix fois trop
+    optimiste quand une seule résolution sur dix est exploitable."""
+    rec, p = fresh()
+    try:
+        res_at, h, j = 10_000_000, 3600, 86400
+        # 20 résolus sur 2 jours, dont 2 seulement exploitables.
+        for i in range(20):
+            mid = f"m{i}"
+            price = 0.45 if i < 2 else 0.99
+            rec.record([FakeMarket(mid, price)], ts=res_at - 48 * h)
+            rec.settle({mid: 1}, now=res_at - int(i * j / 10))
+        assert rec.usable_for_calibration() == 2
+
+        eta = rec.eta_days(100, now=res_at)
+        assert eta is not None
+        # 10 résolus/jour, mais 1 seul sur 10 exploitable → 1 utile/jour.
+        # La projection naïve sur les résolutions brutes donnerait ~10 jours ;
+        # la bonne en donne ~98. C'est ce facteur dix qu'on verrouille ici.
+        naive = (100 - 2) / 10.0
+        assert eta > naive * 5, f"échéance trop optimiste : {eta:.0f} j (naïve {naive:.0f} j)"
+    finally:
+        cleanup(rec, p)
+
+
 # --- rythme et échéance -----------------------------------------------------
 
 

@@ -36,6 +36,10 @@ PRICE_EPS = 0.002
 HEARTBEAT_SECONDS = 6 * 3600
 # Au-delà, un marché disparu des scans est considéré comme à régler.
 SETTLE_AFTER_SECONDS = 2 * 3600
+# Horizon minimal d'observation avant résolution pour qu'un marché compte dans
+# une étude de calibration. Sous 24 h, l'échantillon est dominé par les marchés
+# courts dont l'issue était déjà jouée quand on les a vus.
+CALIB_MIN_HOURS = 24.0
 
 
 @dataclass
@@ -242,6 +246,29 @@ class Recorder:
                 out.append((float(row[0]), int(outcome)))
         return out
 
+    def usable_for_calibration(
+        self, min_hours: float = CALIB_MIN_HOURS, lo: float = 0.05, hi: float = 0.95
+    ) -> int:
+        """Marchés résolus RÉELLEMENT exploitables pour une étude de calibration.
+
+        Compter les marchés résolus est trompeur. Mesuré le 2026-08-15 : sur 492
+        résolus, la médiane d'observation avant résolution était de 4,4 h, et à
+        une heure de l'échéance **98 % étaient déjà au-delà de 0,95 ou sous
+        0,05**. Ce sont des marchés courts (esport, crypto horaire) dont l'issue
+        était jouée avant qu'on les voie.
+
+        Une calibration sur cet échantillon répondrait « les contrats à 99 %
+        gagnent-ils 99 % du temps ? » — vrai, et sans aucun intérêt.
+
+        Un marché ne compte donc que si on l'a observé **assez tôt** ET à un prix
+        situé dans la zone où il reste une vraie incertitude.
+        """
+        n = 0
+        for price, _ in self.price_before_resolution(min_hours / 24.0):
+            if lo <= price <= hi:
+                n += 1
+        return n
+
     def resolution_rate(self, window_days: float = 3.0, now: int | None = None) -> float:
         """Résolutions inscrites par jour, sur une fenêtre récente.
 
@@ -270,13 +297,20 @@ class Recorder:
         `None` quand le rythme est encore inconnu : afficher une date inventée
         serait pire que de reconnaître qu'on ne sait pas encore.
         """
-        s = self.stats()
-        if s["resolved"] >= target:
+        if self.usable_for_calibration() >= target:
             return 0.0
         rate = self.resolution_rate(now=now)
         if rate <= 0:
             return None
-        return (target - s["resolved"]) / rate
+        # Seule une fraction des résolutions est exploitable : on projette sur le
+        # rythme des marchés UTILES, pas sur celui des résolutions brutes, sinon
+        # l'échéance annoncée est optimiste d'un ordre de grandeur.
+        usable = self.usable_for_calibration()
+        s = self.stats()
+        share = usable / s["resolved"] if s["resolved"] else 0.0
+        if share <= 0:
+            return None
+        return (target - usable) / (rate * share)
 
     def stats(self) -> dict:
         q = lambda s: self.db.execute(s).fetchone()[0]
@@ -290,6 +324,7 @@ class Recorder:
         return {
             "markets": q("SELECT COUNT(*) FROM markets"),
             "resolved": q("SELECT COUNT(*) FROM markets WHERE resolved=1"),
+            "usable": self.usable_for_calibration(),
             "ticks": q("SELECT COUNT(*) FROM ticks"),
             "days": days,
             "mb": size / 1e6,

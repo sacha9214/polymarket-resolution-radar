@@ -250,7 +250,11 @@ def dataset_embed() -> discord.Embed:
     estimée — ce qui transforme une attente opaque en compte à rebours lisible.
     """
     st = recorder.stats()
-    done = st["resolved"]
+    # Le compteur de RÉSOLUS surestime massivement ce qui est exploitable : les
+    # marchés courts (esport, crypto horaire) résolvent en masse alors qu'on les
+    # a vus une heure avant, déjà à 0.99. Seuls comptent ceux observés assez tôt
+    # ET dans la zone où il restait une vraie incertitude.
+    done = st["usable"]
     pct = min(done / CALIB_TARGET, 1.0)
     filled = int(pct * 20)
     bar = "█" * filled + "░" * (20 - filled)
@@ -270,7 +274,8 @@ def dataset_embed() -> discord.Embed:
 
     eta = recorder.eta_days(CALIB_TARGET)
     if ready:
-        line = f"`{bar}` **{done}/{CALIB_TARGET}**\n**Ready** — the first calibration study can run."
+        line = (f"`{bar}` **{done}/{CALIB_TARGET}**\n"
+                "**Ready** — the first calibration study can run.")
     else:
         rate = recorder.resolution_rate()
         when = (
@@ -282,6 +287,18 @@ def dataset_embed() -> discord.Embed:
             + (f"{rate:.1f} markets settling per day · {when}" if rate > 0 else when)
         )
     e.add_field(name="Progress to a usable dataset", value=line, inline=False)
+    e.add_field(
+        name="Why most resolved markets don't count",
+        value=(
+            "Short markets — esports, hourly crypto — settle constantly, but by "
+            "the time the radar sees them the outcome is already decided: **98% "
+            "sit above 0.95 or below 0.05**. Measuring calibration on those "
+            "answers *« do 99% contracts win 99% of the time? »* — true, and "
+            f"useless. A market only counts if it was seen **{int(H.CALIB_MIN_HOURS)}h+ "
+            "before resolving**, priced between 0.05 and 0.95."
+        ),
+        inline=False,
+    )
 
     e.add_field(name="Markets tracked", value=f"{st['markets']:,}", inline=True)
     e.add_field(name="Price points", value=f"{st['ticks']:,}", inline=True)
@@ -291,7 +308,9 @@ def dataset_embed() -> discord.Embed:
     if st["mb_per_day"]:
         size += f" (+{st['mb_per_day']:.1f}/day)"
     e.add_field(name="Storage", value=size, inline=True)
-    e.add_field(name="Resolved", value=f"{done:,}", inline=True)
+    e.add_field(
+        name="Resolved", value=f"{st['resolved']:,}\n*{done:,} usable*", inline=True
+    )
     e.add_field(name="Written", value="changes only", inline=True)
 
     e.add_field(
