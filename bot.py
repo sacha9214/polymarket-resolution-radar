@@ -662,6 +662,8 @@ async def unwatch(ctx):
 @bot.slash_command(
     name="radar", description="Show the current resolution situations", guild_ids=GUILDS
 )
+@discord.option("limit", int, description="How many to show (1-10)",
+                min_value=1, max_value=10, default=5, required=False)
 async def radar(ctx, limit: int = 5):
     await ctx.defer()
     res = await get_radar()
@@ -689,6 +691,8 @@ async def radar(ctx, limit: int = 5):
     name="stuck", description="Markets past their end date, most capital first",
     guild_ids=GUILDS,
 )
+@discord.option("limit", int, description="How many to show (1-20)",
+                min_value=1, max_value=20, default=10, required=False)
 async def stuck(ctx, limit: int = 10):
     await ctx.defer()
     res = await get_radar()
