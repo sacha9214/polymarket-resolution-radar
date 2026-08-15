@@ -309,6 +309,84 @@ def test_calibration_sur_donnees_synthetiques():
         cleanup(rec, p)
 
 
+# --- rythme et échéance -----------------------------------------------------
+
+
+@case
+def test_rythme_inconnu_au_demarrage():
+    """Avec quelques minutes d'enregistrement, aucun rythme n'est mesurable."""
+    rec, p = fresh()
+    try:
+        rec.record([FakeMarket("a")], ts=1_000_000)
+        assert rec.resolution_rate(now=1_000_600) == 0.0
+        assert rec.eta_days(100, now=1_000_600) is None, "ne pas inventer une date"
+    finally:
+        cleanup(rec, p)
+
+
+@case
+def test_rythme_mesure_sur_fenetre():
+    rec, p = fresh()
+    try:
+        j = 86400
+        now = 10_000_000
+        rec.record([FakeMarket(f"m{i}") for i in range(30)], ts=now - 10 * j)
+        # 15 résolutions étalées sur les 3 derniers jours
+        for i in range(15):
+            rec.settle({f"m{i}": 1}, now=now - int(i * j / 5))
+        r = rec.resolution_rate(window_days=3.0, now=now)
+        assert 4.0 < r < 6.0, f"attendu ~5/jour, obtenu {r:.2f}"
+    finally:
+        cleanup(rec, p)
+
+
+@case
+def test_rythme_rapporte_au_temps_vecu():
+    """Trois résolutions en 12 h font 6/jour, pas 1/jour : diviser par une
+    fenêtre de 3 jours qu'on n'a pas vécue diviserait le rythme par six."""
+    rec, p = fresh()
+    try:
+        now = 10_000_000
+        start = now - 43200  # 12 h d'enregistrement
+        rec.record([FakeMarket(f"m{i}") for i in range(5)], ts=start)
+        for i in range(3):
+            rec.settle({f"m{i}": 1}, now=now - i * 1000)
+        r = rec.resolution_rate(window_days=3.0, now=now)
+        assert 5.0 < r < 7.0, f"attendu ~6/jour, obtenu {r:.2f}"
+    finally:
+        cleanup(rec, p)
+
+
+@case
+def test_eta_coherente():
+    rec, p = fresh()
+    try:
+        j = 86400
+        now = 10_000_000
+        rec.record([FakeMarket(f"m{i}") for i in range(60)], ts=now - 10 * j)
+        for i in range(20):
+            rec.settle({f"m{i}": 1}, now=now - int(i * j / 10))
+        # Les 20 résolutions tombent dans la fenêtre de 3 jours → 6,7/jour,
+        # et non 10/jour : le rythme se lit sur la fenêtre, pas sur l'étalement
+        # réel des résolutions.
+        eta = rec.eta_days(100, now=now)
+        assert eta is not None
+        assert 10 < eta < 14, f"80 restants à ~6,7/jour → ~12j, obtenu {eta:.1f}"
+    finally:
+        cleanup(rec, p)
+
+
+@case
+def test_eta_nulle_si_objectif_atteint():
+    rec, p = fresh()
+    try:
+        rec.record([FakeMarket(f"m{i}") for i in range(5)], ts=1_000_000)
+        rec.settle({f"m{i}": 1 for i in range(5)}, now=1_100_000)
+        assert rec.eta_days(3, now=1_100_000) == 0.0
+    finally:
+        cleanup(rec, p)
+
+
 # --- volumétrie -------------------------------------------------------------
 
 

@@ -242,6 +242,42 @@ class Recorder:
                 out.append((float(row[0]), int(outcome)))
         return out
 
+    def resolution_rate(self, window_days: float = 3.0, now: int | None = None) -> float:
+        """Résolutions inscrites par jour, sur une fenêtre récente.
+
+        Fenêtre glissante plutôt que moyenne depuis le début : au démarrage, le
+        jeu de données n'a aucun résolu, et une moyenne globale resterait
+        écrasée par ces premiers jours vides pendant des semaines.
+        """
+        now = int(now if now is not None else datetime.datetime.now(datetime.timezone.utc).timestamp())
+        since = now - int(window_days * 86400)
+        n = self.db.execute(
+            "SELECT COUNT(*) FROM markets WHERE resolved=1 AND resolved_at >= ?",
+            (since,),
+        ).fetchone()[0]
+
+        # Si l'enregistrement dure depuis moins que la fenêtre, rapporter au
+        # temps réellement écoulé — sinon on divise par une durée qu'on n'a pas
+        # vécue et le rythme paraît deux fois plus lent qu'il n'est.
+        first = self.db.execute("SELECT MIN(ts) FROM ticks").fetchone()[0]
+        elapsed = (now - first) / 86400 if first else 0.0
+        span = min(window_days, elapsed) if elapsed > 0 else 0.0
+        return n / span if span > 0.25 else 0.0
+
+    def eta_days(self, target: int, now: int | None = None) -> float | None:
+        """Jours estimés avant d'atteindre `target` marchés résolus.
+
+        `None` quand le rythme est encore inconnu : afficher une date inventée
+        serait pire que de reconnaître qu'on ne sait pas encore.
+        """
+        s = self.stats()
+        if s["resolved"] >= target:
+            return 0.0
+        rate = self.resolution_rate(now=now)
+        if rate <= 0:
+            return None
+        return (target - s["resolved"]) / rate
+
     def stats(self) -> dict:
         q = lambda s: self.db.execute(s).fetchone()[0]
         size = os.path.getsize(self.path) if os.path.exists(self.path) else 0

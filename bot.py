@@ -94,6 +94,11 @@ db.execute(
     """CREATE TABLE IF NOT EXISTS guides(
   channel_id INTEGER PRIMARY KEY, message_id INTEGER, updated INTEGER)"""
 )
+# Même schéma que `board` pour réutiliser `upsert_pinned` sans le modifier.
+db.execute(
+    """CREATE TABLE IF NOT EXISTS databoard(
+  channel_id INTEGER PRIMARY KEY, message_id INTEGER, updated INTEGER)"""
+)
 db.execute("""CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)""")
 
 # Enregistreur : base SÉPARÉE de radar.db, pour que la base opérationnelle reste
@@ -231,6 +236,75 @@ def signal_embed(s) -> discord.Embed:
         text="Polymarket does not publish which outcome was proposed — "
         "check the market itself before acting."
     )
+    return e
+
+
+CALIB_TARGET = 100   # marchés résolus nécessaires pour une première étude
+
+
+def dataset_embed() -> discord.Embed:
+    """Tableau vivant du jeu de données.
+
+    Le compteur seul serait décourageant : « 0 résolu » pendant des semaines.
+    On affiche donc la PROGRESSION vers le seuil d'exploitabilité et la date
+    estimée — ce qui transforme une attente opaque en compte à rebours lisible.
+    """
+    st = recorder.stats()
+    done = st["resolved"]
+    pct = min(done / CALIB_TARGET, 1.0)
+    filled = int(pct * 20)
+    bar = "█" * filled + "░" * (20 - filled)
+    ready = done >= CALIB_TARGET
+
+    e = discord.Embed(
+        title="🗄️ Price-history dataset — live",
+        description=(
+            "Polymarket **deletes price history once a market resolves** — "
+            "verified on 500 resolved markets, zero points returned. No strategy "
+            "here can be backtested from public data.\n"
+            "This radar keeps what it already reads every cycle and pairs it with "
+            "the real outcome. It cannot be bought or copied, only accumulated."
+        ),
+        color=0x1ABC9C if ready else 0x34495E,
+    )
+
+    eta = recorder.eta_days(CALIB_TARGET)
+    if ready:
+        line = f"`{bar}` **{done}/{CALIB_TARGET}**\n**Ready** — the first calibration study can run."
+    else:
+        rate = recorder.resolution_rate()
+        when = (
+            f"about **{eta:.0f} days** to go" if eta is not None and eta < 400
+            else "pace not measurable yet — needs a full day of recording"
+        )
+        line = (
+            f"`{bar}` **{done}/{CALIB_TARGET}**\n"
+            + (f"{rate:.1f} markets settling per day · {when}" if rate > 0 else when)
+        )
+    e.add_field(name="Progress to a usable dataset", value=line, inline=False)
+
+    e.add_field(name="Markets tracked", value=f"{st['markets']:,}", inline=True)
+    e.add_field(name="Price points", value=f"{st['ticks']:,}", inline=True)
+    e.add_field(name="Depth", value=f"{st['days']:.1f} days", inline=True)
+
+    size = f"{st['mb']:.1f} MB"
+    if st["mb_per_day"]:
+        size += f" (+{st['mb_per_day']:.1f}/day)"
+    e.add_field(name="Storage", value=size, inline=True)
+    e.add_field(name="Resolved", value=f"{done:,}", inline=True)
+    e.add_field(name="Written", value="changes only", inline=True)
+
+    e.add_field(
+        name="What it will answer",
+        value=(
+            "Does a contract priced at 5% actually happen 5% of the time? If not, "
+            "selling long shots is a measurable edge. Nobody can answer that on "
+            "Polymarket today — the data to check it does not exist publicly."
+        ),
+        inline=False,
+    )
+    e.set_footer(text=f"Rewritten every {POLL_MINUTES} min · recording since it was switched on")
+    e.timestamp = discord.utils.utcnow()
     return e
 
 
@@ -430,6 +504,15 @@ async def poll():
 
     if not feeds and not boards:
         return
+
+    for (channel_id,) in db.execute("SELECT channel_id FROM databoard").fetchall():
+        ch = bot.get_channel(channel_id)
+        if ch is None:
+            continue
+        try:
+            await upsert_pinned(ch, "databoard", dataset_embed())
+        except discord.DiscordException as e:
+            print(f"[poll] databoard failed on {channel_id}: {e}", flush=True)
 
     for (channel_id,) in boards:
         ch = bot.get_channel(channel_id)
@@ -721,6 +804,23 @@ async def dataset_cmd(ctx):
     e.add_field(name="Storage", value=size, inline=True)
     e.set_footer(text="Recording every cycle · only changes are written")
     await ctx.respond(embed=e, ephemeral=True)
+
+
+@bot.slash_command(
+    name="dataset-board",
+    description="Install the live dataset board in this channel",
+    guild_ids=GUILDS,
+)
+async def dataset_board_cmd(ctx):
+    await ctx.defer(ephemeral=True)
+    await upsert_pinned(ctx.channel, "databoard", dataset_embed())
+    await ctx.respond(
+        f"🗄️ Dataset board installed and pinned. It is **rewritten in place "
+        f"every {POLL_MINUTES} min**, so this channel always shows the current "
+        "state.\nExpect it to look idle at first — the counter that matters "
+        "(**resolved markets**) only moves as markets settle.",
+        ephemeral=True,
+    )
 
 
 @bot.slash_command(
