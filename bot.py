@@ -684,6 +684,46 @@ async def preview(ctx):
 
 
 @bot.slash_command(
+    name="dataset",
+    description="Growth of the price-history dataset being recorded",
+    guild_ids=GUILDS,
+)
+async def dataset_cmd(ctx):
+    await ctx.defer(ephemeral=True)
+    st = recorder.stats()
+
+    e = discord.Embed(
+        title="🗄️ Price-history dataset",
+        description=(
+            "Polymarket **deletes price history once a market resolves** — verified "
+            "on 500 resolved markets, zero data points returned. So no strategy on "
+            "this platform can be backtested from public data.\n"
+            "This radar keeps what it already reads every cycle, and pairs it with "
+            "the real outcome. The data cannot be bought or copied, only accumulated."
+        ),
+        color=0x1ABC9C if st["resolved"] else 0x34495E,
+    )
+    e.add_field(name="Markets tracked", value=f"{st['markets']:,}", inline=True)
+    e.add_field(name="Price points", value=f"{st['ticks']:,}", inline=True)
+    e.add_field(name="Depth", value=f"{st['days']:.1f} days", inline=True)
+    e.add_field(
+        name="✅ Resolved — the usable part",
+        value=(
+            f"**{st['resolved']:,}** markets with a known outcome.\n"
+            + ("A calibration study needs about 100. "
+               f"{'Not there yet — this grows on its own as markets settle.' if st['resolved'] < 100 else 'Enough to run the first study.'}")
+        ),
+        inline=False,
+    )
+    size = f"{st['mb']:.1f} MB"
+    if st["mb_per_day"]:
+        size += f" · {st['mb_per_day']:.1f} MB/day"
+    e.add_field(name="Storage", value=size, inline=True)
+    e.set_footer(text="Recording every cycle · only changes are written")
+    await ctx.respond(embed=e, ephemeral=True)
+
+
+@bot.slash_command(
     name="setup", description="Create the full channel structure and wire everything up",
     guild_ids=GUILDS,
 )
