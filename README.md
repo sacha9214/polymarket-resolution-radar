@@ -160,3 +160,7 @@ pour être filtrés.
   un signal directionnel, c'est un signal d'incertitude et de délai.
 - **Le silence est l'état normal.** 0,4 % de contestations : si ce salon parle
   tous les jours, c'est que les seuils sont mal réglés.
+
+## Licence
+
+[MIT](LICENSE)
